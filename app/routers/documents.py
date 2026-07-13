@@ -1,12 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
-import io
 
 from app.database import get_db
-from app.models import User, Document, DocumentChunk, QueryLog
-from app.schemas import DocumentResponse, DocumentWithChunks, AskQuestion, AskQuestionResponse, QueryLogResponse, DocumentChunkResponse
+from app.models import User, Document, DocumentChunk
+from app.schemas import DocumentResponse, DocumentWithChunks
 from app.auth import get_current_user
+from app.chunking import chunk_text
+from app.embeddings import embed_batchfrom app.auth import get_current_user
 from app.chunking import chunk_text
 from app.embeddings import embed_batch
 from app.groq_client import get_groq_answer
