@@ -1,7 +1,7 @@
 # Environment
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
 
 # Personal interview notes — not for the repo
 phase0-notes.md
