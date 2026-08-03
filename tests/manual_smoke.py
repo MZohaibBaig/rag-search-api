@@ -1,6 +1,7 @@
 """
-End-to-end API test script for the RAG Search API.
-Usage: python tests/test_endpoints.py
+End-to-end API smoke script for the RAG Search API. Not a pytest suite —
+pytest doesn't discover this file. Run it directly against a live server.
+Usage: python tests/manual_smoke.py
 """
 
 import sys

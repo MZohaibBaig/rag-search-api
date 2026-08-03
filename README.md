@@ -142,8 +142,10 @@ All protected endpoints expect `Authorization: Bearer <token>` in the request he
 Run the end-to-end verification script (requires the API to be running):
 
 ```bash
-python tests/test_endpoints.py
+python tests/manual_smoke.py
 ```
+
+This is a manual smoke script, not a pytest suite — a pytest suite is in progress.
 
 The script registers a user, logs in, uploads a sample document, asks a question, and checks history — printing a `PASS/FAIL` result per step.
 
