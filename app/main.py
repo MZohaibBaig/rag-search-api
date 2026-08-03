@@ -1,3 +1,5 @@
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.database import engine, Base
@@ -13,11 +15,20 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# CORS middleware (allow frontend to call from different origin)
+# CORS middleware. Auth is a Bearer token (not cookies), so credentialed
+# cross-origin requests are never needed — allow_credentials stays False.
+cors_origins = [
+    origin.strip()
+    for origin in os.getenv(
+        "CORS_ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:5173"
+    ).split(",")
+    if origin.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, restrict to your frontend domain
-    allow_credentials=True,
+    allow_origins=cors_origins,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
