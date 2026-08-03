@@ -106,14 +106,16 @@ docker-compose up --build
 - API starts on `localhost:8000`
 - Tables and extensions auto-initialize on first run
 
-Set your Groq key before running:
+Set your Groq key and Postgres password before running (`docker-compose.yml`
+reads `POSTGRES_PASSWORD` with no default, so it fails immediately if unset):
 ```bash
 # Windows PowerShell
 $env:GROQ_API_KEY="gsk_..."
+$env:POSTGRES_PASSWORD="change-me"
 docker-compose up --build
 
 # Linux / macOS
-GROQ_API_KEY="gsk_..." docker-compose up --build
+GROQ_API_KEY="gsk_..." POSTGRES_PASSWORD="change-me" docker-compose up --build
 ```
 
 ## API Endpoints

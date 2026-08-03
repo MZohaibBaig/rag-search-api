@@ -3,6 +3,9 @@
 .env.local
 .env.*.local
 
+# Personal interview notes — not for the repo
+phase0-notes.md
+
 # Python
 __pycache__/
 *.py[cod]
