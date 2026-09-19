@@ -1,4 +1,4 @@
-from sentence_transformers import SentenceTransformer
+from fastembed import TextEmbedding
 import os
 
 # Load model once at startup (expensive operation)
@@ -9,7 +9,7 @@ def get_embedding_model():
     global _model
     if _model is None:
         model_name = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
-        _model = SentenceTransformer(model_name)
+        _model = TextEmbedding(model_name, cache_dir=os.getenv("FASTEMBED_CACHE_PATH", "/models"))
     return _model
 
 def embed_text(text: str) -> list[float]:
@@ -23,8 +23,7 @@ def embed_text(text: str) -> list[float]:
         A list of 384 floats (the embedding).
     """
     model = get_embedding_model()
-    embedding = model.encode(text, convert_to_tensor=False)
-    return embedding.tolist()
+    return next(iter(model.embed([text]))).tolist()
 
 def embed_batch(texts: list[str]) -> list[list[float]]:
     """
@@ -37,5 +36,4 @@ def embed_batch(texts: list[str]) -> list[list[float]]:
         List of embeddings (each a list of 384 floats).
     """
     model = get_embedding_model()
-    embeddings = model.encode(texts, convert_to_tensor=False)
-    return [emb.tolist() for emb in embeddings]
+    return [emb.tolist() for emb in model.embed(texts)]

@@ -1,0 +1,22 @@
+# Production compose overlay — no bind mount, named image tag.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# This file overrides only the parts that differ in production.
+# The base docker-compose.yml still owns all service definitions, environment
+# variables, healthchecks, and the postgres_data volume. Do not duplicate them
+# here.
+#
+# Why a separate file and not docker-compose.override.yml?
+# docker-compose.override.yml is auto-loaded by `docker compose up`, which
+# would silently remove the bind mount and break the local dev workflow.
+# A named file must be explicitly passed with -f, making the intent clear.
+
+services:
+  app:
+    # Tag the image for production tracking (distinct from the dev :latest)
+    image: rag-search-api:prod
+    # Remove the development bind mount (.:/app) from the base file.
+    # In production the image ships all code; no host directory is mounted.
+    volumes: []
