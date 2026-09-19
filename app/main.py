@@ -2,7 +2,10 @@ import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.database import engine, Base
+from fastapi.responses import JSONResponse
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
+from app.database import engine, Base, SessionLocal
 from app.routers import auth, documents, queries
 
 # Create tables
@@ -38,6 +41,7 @@ app.include_router(auth.router)
 app.include_router(documents.router)
 app.include_router(queries.router)
 
+
 @app.get("/")
 def root():
     """Health check endpoint."""
@@ -45,3 +49,19 @@ def root():
         "message": "RAG Search API is running",
         "docs": "/docs"
     }
+
+
+@app.get("/health", include_in_schema=False)
+def health():
+    """Unauthenticated liveness + DB connectivity check. Excluded from OpenAPI schema."""
+    db = SessionLocal()
+    try:
+        db.execute(text("SELECT 1"))
+        return {"status": "ok"}
+    except SQLAlchemyError as exc:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "error", "detail": str(exc)},
+        )
+    finally:
+        db.close()
