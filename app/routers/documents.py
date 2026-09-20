@@ -7,7 +7,6 @@ from app.models import User, Document
 from app.schemas import DocumentResponse, DocumentWithChunks
 from app.auth import get_current_user
 from app.rag import ingest_text
-from app.auth import get_current_user
 from app.groq_client import get_groq_answer
 
 router = APIRouter(prefix="/documents", tags=["documents"])

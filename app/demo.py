@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from app.auth import hash_password
 from app.database import SessionLocal, get_db
 from app.groq_client import get_groq_answer
-from app.models import Document, User
+from app.models import Document, DocumentChunk, User
 from app.rag import build_context, ingest_text, retrieve_chunks
 
 logger = logging.getLogger("uvicorn.error")
@@ -56,7 +56,15 @@ def seed_demo_document() -> None:
             Document.user_id == user.id, Document.filename == DEMO_FILENAME
         ).first()
         if exists:
-            return
+            has_chunks = db.query(DocumentChunk).filter(
+                DocumentChunk.document_id == exists.id
+            ).first()
+            if has_chunks:
+                return
+            # A previous seed committed the Document but died before its chunks were stored.
+            logger.warning("Demo document %s has no chunks; rebuilding it", DEMO_FILENAME)
+            db.delete(exists)
+            db.commit()
 
         text = DEMO_DOC_PATH.read_text(encoding="utf-8")
         ingest_text(db, user.id, DEMO_FILENAME, text)

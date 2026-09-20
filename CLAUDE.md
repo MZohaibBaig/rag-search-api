@@ -61,7 +61,7 @@ This is a FastAPI RAG (Retrieval-Augmented Generation) backend. The query flow: 
 
 **Embeddings (`app/embeddings.py`):** `SentenceTransformer` is lazy-loaded as a module-level singleton on first call. Model: `all-MiniLM-L6-v2` → 384-dim vectors. In Docker, the model is baked into the image at build time (no network hit on first request).
 
-**LLM (`app/groq_client.py`):** Calls Groq's `llama-3.1-8b-instant` with a system prompt that constrains answers to provided context. Context is the top-5 chunks concatenated with chunk index headers.
+**LLM (`app/groq_client.py`):** Calls Groq's `openai/gpt-oss-20b` with a system prompt that constrains answers to provided context. Context is the top-5 chunks concatenated with chunk index headers.
 
 **Routers:**
 - `app/routers/auth.py` — `POST /auth/register`, `POST /auth/login`, `GET /auth/me`
