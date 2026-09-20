@@ -1,10 +1,13 @@
 import os
 from groq import Groq
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 
 load_dotenv()
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+# Read this one key straight from .env so a stale OS-level GROQ_API_KEY (e.g. a
+# Windows User env var) can't shadow it and cause 401s. Falls back to the process
+# env when there's no .env (Docker, Railway). Scoped to this key on purpose.
+GROQ_API_KEY = dotenv_values().get("GROQ_API_KEY") or os.getenv("GROQ_API_KEY")
 
 def get_groq_answer(question: str, context: str) -> str:
     """
@@ -18,7 +21,7 @@ def get_groq_answer(question: str, context: str) -> str:
         The LLM's generated answer.
     """
     client = Groq(api_key=GROQ_API_KEY)
-    
+
     system_prompt = """You are a helpful assistant answering questions based on provided context.
 Answer only using the context provided. If the context doesn't contain enough information to answer the question, say so.
 Keep your answer concise and grounded in the context."""
@@ -31,7 +34,7 @@ Question: {question}
 Answer:"""
     
     message = client.chat.completions.create(
-        model="llama-3.1-8b-instant",
+        model="openai/gpt-oss-20b",
         max_tokens=1024,
         messages=[
             {"role": "system", "content": system_prompt},

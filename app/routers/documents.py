@@ -3,16 +3,11 @@ from sqlalchemy.orm import Session
 from sqlalchemy import desc
 
 from app.database import get_db
-from app.models import User, Document, DocumentChunk
+from app.models import User, Document
 from app.schemas import DocumentResponse, DocumentWithChunks
 from app.auth import get_current_user
-from app.chunking import chunk_text
-from app.embeddings import embed_batch
-from app.chunking import chunk_text
-from app.embeddings import embed_batch
+from app.rag import ingest_text
 from app.auth import get_current_user
-from app.chunking import chunk_text
-from app.embeddings import embed_batch
 from app.groq_client import get_groq_answer
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -36,33 +31,7 @@ async def upload_document(
             detail="File is empty"
         )
     
-    # Create document record
-    document = Document(
-        user_id=current_user.id,
-        filename=file.filename
-    )
-    db.add(document)
-    db.commit()
-    db.refresh(document)
-    
-    # Chunk and embed
-    chunks = chunk_text(text)
-    embeddings = embed_batch(chunks)
-    
-    # Store chunks
-    for chunk_index, (chunk_text_str, embedding) in enumerate(zip(chunks, embeddings)):
-        doc_chunk = DocumentChunk(
-            document_id=document.id,
-            chunk_text=chunk_text_str,
-            embedding=embedding,
-            chunk_index=chunk_index
-        )
-        db.add(doc_chunk)
-    
-    db.commit()
-    db.refresh(document)
-    
-    return document
+    return ingest_text(db, current_user.id, file.filename, text)
 
 @router.get("/", response_model=list[DocumentResponse])
 def list_documents(

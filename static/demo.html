@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RAG Search Demo</title>
+<style>
+  body { font-family: -apple-system, Segoe UI, sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding: 24px; max-width: 860px; margin: 0 auto; }
+  h1 { font-size: 20px; margin-bottom: 4px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: #94a3b8; margin: 24px 0 8px; }
+  .sub { font-size: 13px; color: #94a3b8; margin-bottom: 20px; line-height: 1.5; }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+  .chip { background: #1e293b; border: 1px solid #334155; color: #e2e8f0; padding: 8px 12px; border-radius: 999px; cursor: pointer; font-size: 13px; }
+  .chip:hover { border-color: #3b82f6; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  input[type=text], input[type=password], input[type=email], select { background: #1e293b; border: 1px solid #334155; color: #e2e8f0; padding: 8px 10px; border-radius: 6px; font: inherit; }
+  .row input[type=text] { flex: 1; min-width: 200px; }
+  button { background: #3b82f6; border: none; color: white; padding: 8px 16px; border-radius: 6px; cursor: pointer; font: inherit; }
+  button:hover { background: #2563eb; }
+  button:disabled { background: #334155; cursor: default; }
+  .card { background: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 12px 14px; margin-bottom: 10px; }
+  .card .head { display: flex; justify-content: space-between; font-size: 12px; color: #94a3b8; margin-bottom: 6px; gap: 8px; flex-wrap: wrap; }
+  .card .text { font-size: 13px; line-height: 1.5; white-space: pre-wrap; }
+  .bar { height: 6px; background: #334155; border-radius: 3px; margin-bottom: 8px; overflow: hidden; }
+  .bar > div { height: 100%; background: #4ade80; }
+  .bar.low > div { background: #f87171; }
+  .score { font-variant-numeric: tabular-nums; }
+  .latency { font-size: 12px; color: #94a3b8; margin: 12px 0; }
+  .answer { background: #1e293b; border: 1px solid #3b82f6; border-radius: 10px; padding: 14px; font-size: 14px; line-height: 1.55; white-space: pre-wrap; }
+  .caption { font-size: 12px; color: #fbbf24; margin: 6px 0 12px; }
+  .msg { font-size: 13px; padding: 10px 12px; border-radius: 6px; margin: 10px 0; }
+  .msg.error { background: #2a1517; border: 1px solid #f87171; color: #fca5a5; }
+  .msg.ok { color: #4ade80; }
+  .muted { color: #64748b; font-size: 12px; }
+  details { margin-top: 32px; background: #111c33; border: 1px solid #334155; border-radius: 10px; padding: 12px 14px; }
+  summary { cursor: pointer; font-size: 14px; }
+  details .row { margin: 10px 0; }
+</style>
+</head>
+<body>
+
+<h1>RAG Search Demo</h1>
+<div class="sub">
+  Ask a question about a sample document (<span id="docname">…</span>, a fictional lighthouse fact sheet).
+  The question is embedded, the closest chunks are pulled from pgvector by cosine similarity, and only those chunks are given to the LLM.
+</div>
+
+<h2>Try a question</h2>
+<div class="chips" id="chips"></div>
+<form class="row" id="askform">
+  <input type="text" id="q" maxlength="500" placeholder="Or type your own question">
+  <button type="submit" id="askbtn">Ask</button>
+</form>
+
+<div id="result"></div>
+
+<details id="upload">
+  <summary>Upload your own document</summary>
+  <div class="muted" style="margin-top:8px">Uses the authenticated API: register, log in, upload a .txt file, then ask questions about it.</div>
+  <div class="row">
+    <input type="text" id="u-name" placeholder="username">
+    <input type="email" id="u-email" placeholder="email (register only)">
+    <input type="password" id="u-pass" placeholder="password">
+  </div>
+  <div class="row">
+    <button type="button" id="btn-register">Register</button>
+    <button type="button" id="btn-login">Log in</button>
+  </div>
+  <div id="auth-msg"></div>
+  <div id="upload-area" hidden>
+    <div class="row">
+      <input type="file" id="u-file" accept=".txt,text/plain">
+      <button type="button" id="btn-upload">Upload</button>
+    </div>
+    <div class="row">
+      <select id="u-docs"></select>
+    </div>
+    <div class="row">
+      <input type="text" id="u-q" placeholder="Question about the selected document">
+      <button type="button" id="btn-uask">Ask</button>
+    </div>
+    <div id="u-result"></div>
+  </div>
+</details>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+
+function showMsg(container, text, kind) {
+  container.replaceChildren(el('div', 'msg ' + kind, text));
+}
+
+// Turn any failed response into a plain sentence, never a raw trace.
+async function errorText(res) {
+  if (res.status === 429) {
+    let d = ''; try { d = (await res.json()).detail; } catch (e) {}
+    return d || 'Too many requests. Please wait a moment and try again.';
+  }
+  let detail = '';
+  try {
+    const body = await res.json();
+    detail = typeof body.detail === 'string' ? body.detail : '';
+  } catch (e) {}
+  if (res.status >= 500) return detail || 'The server had a problem. Please try again shortly.';
+  return detail || ('Request failed (' + res.status + ').');
+}
+
+// ---------- Demo ----------
+let busy = false;
+
+async function loadExamples() {
+  try {
+    const res = await fetch('/demo/examples');
+    if (!res.ok) throw new Error();
+    const data = await res.json();
+    $('docname').textContent = data.filename;
+    data.examples.forEach((ex) => {
+      const b = el('button', 'chip', ex.question);
+      b.type = 'button';
+      b.onclick = () => { $('q').value = ex.question; ask(ex.question, ex.unanswerable); };
+      $('chips').appendChild(b);
+    });
+  } catch (e) {
+    showMsg($('result'), 'Could not load example questions. You can still type your own.', 'error');
+  }
+}
+
+function renderChunks(chunks) {
+  const wrap = el('div');
+  wrap.appendChild(el('h2', null, 'Retrieved chunks (ranked by similarity)'));
+  chunks.forEach((c, i) => {
+    const card = el('div', 'card');
+    const head = el('div', 'head');
+    head.appendChild(el('span', null, '#' + (i + 1) + ' · chunk ' + c.chunk_index));
+    head.appendChild(el('span', 'score', 'similarity ' + c.similarity.toFixed(3) + ' · distance ' + c.distance.toFixed(3)));
+    card.appendChild(head);
+    const bar = el('div', c.similarity < 0.3 ? 'bar low' : 'bar');
+    const fill = el('div');
+    fill.style.width = Math.max(0, Math.min(1, c.similarity)) * 100 + '%';
+    bar.appendChild(fill);
+    card.appendChild(bar);
+    card.appendChild(el('div', 'text', c.chunk_text));
+    wrap.appendChild(card);
+  });
+  return wrap;
+}
+
+async function ask(question, unanswerable) {
+  if (busy || !question.trim()) return;
+  busy = true;
+  $('askbtn').disabled = true;
+  const out = $('result');
+  showMsg(out, 'Retrieving and generating…', 'ok');
+  try {
+    const res = await fetch('/demo/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question })
+    });
+    if (!res.ok) { showMsg(out, await errorText(res), 'error'); return; }
+    const d = await res.json();
+
+    out.replaceChildren();
+    if (unanswerable) {
+      out.appendChild(el('div', 'caption', "this question isn't covered by the document — notice the answer doesn't make something up."));
+    }
+    out.appendChild(renderChunks(d.chunks));
+    if (d.status === 'ok') {
+      out.appendChild(el('div', 'latency',
+        'retrieved ' + d.chunks.length + ' chunks in ' + d.retrieve_ms + 'ms - generated answer in ' + (d.generate_ms / 1000).toFixed(1) + 's'));
+      out.appendChild(el('h2', null, 'Answer'));
+      out.appendChild(el('div', 'answer', d.answer));
+    } else {
+      out.appendChild(el('div', 'latency', 'retrieved ' + d.chunks.length + ' chunks in ' + d.retrieve_ms + 'ms - answer generation failed'));
+      out.appendChild(el('div', 'msg error', d.error || 'Answer generation failed.'));
+    }
+  } catch (e) {
+    showMsg(out, 'Could not reach the server. Check your connection and try again.', 'error');
+  } finally {
+    busy = false;
+    $('askbtn').disabled = false;
+  }
+}
+
+$('askform').onsubmit = (ev) => { ev.preventDefault(); ask($('q').value, false); };
+loadExamples();
+
+// ---------- Upload your own (authenticated flow) ----------
+let token = null;
+const authHeaders = () => ({ 'Authorization': 'Bearer ' + token });
+
+async function register() {
+  const box = $('auth-msg');
+  try {
+    const res = await fetch('/auth/register', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: $('u-name').value, email: $('u-email').value, password: $('u-pass').value })
+    });
+    if (!res.ok) { showMsg(box, res.status === 422 ? 'Please enter a username, a valid email and a password.' : await errorText(res), 'error'); return; }
+    showMsg(box, 'Registered. Now log in.', 'ok');
+  } catch (e) { showMsg(box, 'Could not reach the server.', 'error'); }
+}
+
+async function login() {
+  const box = $('auth-msg');
+  try {
+    const res = await fetch('/auth/login', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: $('u-name').value, password: $('u-pass').value })
+    });
+    if (!res.ok) { showMsg(box, await errorText(res), 'error'); return; }
+    token = (await res.json()).access_token;
+    showMsg(box, 'Logged in as ' + $('u-name').value + '.', 'ok');
+    $('upload-area').hidden = false;
+    await loadDocs();
+  } catch (e) { showMsg(box, 'Could not reach the server.', 'error'); }
+}
+
+async function loadDocs(selectId) {
+  const res = await fetch('/documents/', { headers: authHeaders() });
+  if (!res.ok) { showMsg($('u-result'), await errorText(res), 'error'); return; }
+  const docs = await res.json();
+  const sel = $('u-docs');
+  sel.replaceChildren();
+  docs.forEach((d) => {
+    const o = el('option', null, d.filename + ' (id ' + d.id + ')');
+    o.value = d.id;
+    sel.appendChild(o);
+  });
+  if (selectId) sel.value = selectId;
+}
+
+async function upload() {
+  const f = $('u-file').files[0];
+  if (!f) { showMsg($('u-result'), 'Choose a .txt file first.', 'error'); return; }
+  const fd = new FormData();
+  fd.append('file', f);
+  showMsg($('u-result'), 'Uploading, chunking and embedding…', 'ok');
+  try {
+    const res = await fetch('/documents/upload', { method: 'POST', headers: authHeaders(), body: fd });
+    if (!res.ok) { showMsg($('u-result'), await errorText(res), 'error'); return; }
+    const doc = await res.json();
+    await loadDocs(doc.id);
+    showMsg($('u-result'), 'Uploaded ' + doc.filename + ' (' + doc.chunks.length + ' chunks). Ask a question below.', 'ok');
+  } catch (e) { showMsg($('u-result'), 'Could not reach the server.', 'error'); }
+}
+
+async function uploadAsk() {
+  const out = $('u-result');
+  const document_id = parseInt($('u-docs').value, 10);
+  const question = $('u-q').value.trim();
+  if (!document_id || !question) { showMsg(out, 'Select a document and enter a question.', 'error'); return; }
+  showMsg(out, 'Thinking…', 'ok');
+  try {
+    const res = await fetch('/queries/ask', {
+      method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
+      body: JSON.stringify({ document_id, question })
+    });
+    if (!res.ok) { showMsg(out, await errorText(res), 'error'); return; }
+    const d = await res.json();
+    out.replaceChildren();
+    d.retrieved_chunks.forEach((c) => {
+      const card = el('div', 'card');
+      card.appendChild(el('div', 'head', 'chunk ' + c.chunk_index));
+      card.appendChild(el('div', 'text', c.chunk_text));
+      out.appendChild(card);
+    });
+    out.appendChild(el('div', 'answer', d.answer));
+  } catch (e) { showMsg(out, 'Could not reach the server.', 'error'); }
+}
+
+$('btn-register').onclick = register;
+$('btn-login').onclick = login;
+$('btn-upload').onclick = upload;
+$('btn-uask').onclick = uploadAsk;
+</script>
+</body>
+</html>

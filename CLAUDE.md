@@ -77,3 +77,66 @@ All document and query endpoints are user-scoped (every query filters `user_id =
 ## No tests
 
 There are no application tests. A `test_endpoints.py` was renamed out of pytest's discovery path (see commit history).
+# Working agreement
+
+## 1. Think before coding
+Don't assume. Don't hide confusion. Surface tradeoffs.
+- State assumptions explicitly. If uncertain, ask rather than guess.
+- Present multiple interpretations when genuinely ambiguous — don't silently pick one.
+- Push back if a simpler approach exists.
+- Stop when confused. Name what's unclear and ask.
+- If a file or path I referenced doesn't exist, say so and stop — do not create it to make the instruction work.
+
+## 2. Simplicity first
+Minimum code that solves the problem. Nothing speculative.
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No "flexibility" or configurability that wasn't requested.
+- No error handling for impossible scenarios.
+- If 200 lines could be 50, rewrite it.
+
+Test: would a senior engineer call this overcomplicated? If yes, simplify.
+
+## 3. Surgical changes
+Touch only what you must.
+- Don't "improve" adjacent code, comments, or formatting.
+- Don't refactor what isn't broken.
+- Match existing style even if you'd do it differently.
+- Notice unrelated dead code? Mention it. Don't delete it.
+- Remove imports/variables that YOUR change orphaned. Nothing else.
+
+Test: every changed line traces directly to the request.
+
+## 4. Goal-driven execution
+Define success criteria, then loop until verified.
+- "Add validation" → "write tests for invalid inputs, then make them pass"
+- "Fix the bug" → "write a test reproducing it, then make it pass"
+- For multi-step work, state the plan as: step → verify: check
+
+## 5. Verify, don't claim
+Never report success without running something that proves it.
+- Report real command output, not what you expect the output to be.
+- A build that "should work" isn't verified. Build it.
+- If you can't verify something (no API key, no network, no test suite), say so plainly rather than implying it passed.
+- If you measure something, say what you measured and when — stale measurements have caused real confusion here.
+
+## Project conventions
+
+**Environment**
+- Windows. Terminal commands must be PowerShell, not bash.
+- Python: use `py -3.13`. Bare `python` resolves to 3.8 on this machine and can't install pinned requirements.
+- Working venv is `venv/`. `.venv/` is gitignored.
+
+**Git**
+- Never commit or push unless explicitly asked. Default to leaving changes staged or unstaged for review.
+- Branch off `main`, commit, push, open PR, wait for green checks, merge, pull. `main` is protected.
+- Before staging: check `git status`. Generated directories (`staticfiles/`, `.venv/`, build output) have been accidentally staged twice. Don't let it happen again.
+
+**Docker**
+- Tail long build output (`| Select-Object -Last 60`), don't dump it in full.
+- When checking an image, verify you're looking at the tag you just built — stale tags from earlier builds have caused wrong conclusions here.
+- These apps bind `0.0.0.0` on `$PORT` with a fallback. Don't hardcode ports.
+
+**Deployment context**
+- Three projects deploy to Railway sharing one PostgreSQL instance, each with its own database.
+- PG18 volumes mount at `/var/lib/postgresql`, NOT `/var/lib/postgresql/data`. This exact mistake silently broke persistence once.

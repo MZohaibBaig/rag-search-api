@@ -1,4 +1,5 @@
 import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -7,12 +8,21 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from app.database import engine, Base, SessionLocal
 from app.routers import auth, documents, queries
+from app import demo
 
 # Create tables
 Base.metadata.create_all(bind=engine)
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    demo.seed_demo_document()
+    yield
+
+
 # Initialize FastAPI app
 app = FastAPI(
+    lifespan=lifespan,
     title="RAG Search API",
     description="Retrieval-Augmented Generation backend for document Q&A",
     version="1.0.0"
@@ -40,6 +50,7 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(documents.router)
 app.include_router(queries.router)
+app.include_router(demo.router)
 
 
 @app.get("/")
