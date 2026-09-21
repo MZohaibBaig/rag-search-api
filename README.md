@@ -37,8 +37,8 @@ Client Request
                                │ retrieved chunks
                       ┌────────▼────────┐
                       │    Groq LLM     │
-                      │ llama-3.1-8b-   │
-                      │    instant      │
+                      │ openai/gpt-oss- │
+                      │      20b        │
                       └────────┬────────┘
                                │ grounded answer
                                ▼
@@ -53,7 +53,7 @@ Client Request
 | **Database** | PostgreSQL 18 + pgvector 0.8.3 |
 | **Auth** | JWT (HS256) + bcrypt password hashing |
 | **Embeddings** | sentence-transformers/all-MiniLM-L6-v2 (384-dim) |
-| **LLM** | Groq API — llama-3.1-8b-instant (free tier) |
+| **LLM** | Groq API — openai/gpt-oss-20b (free tier) |
 | **Testing** | httpx (end-to-end script) |
 | **Containerization** | Docker + docker-compose |
 

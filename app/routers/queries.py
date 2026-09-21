@@ -3,10 +3,10 @@ from sqlalchemy.orm import Session
 from sqlalchemy import desc
 
 from app.database import get_db
-from app.models import User, Document, DocumentChunk, QueryLog
+from app.models import User, Document, QueryLog
 from app.schemas import AskQuestion, AskQuestionResponse, QueryLogResponse, DocumentChunkResponse
 from app.auth import get_current_user
-from app.embeddings import embed_text
+from app.rag import retrieve_chunks, build_context
 from app.groq_client import get_groq_answer
 
 router = APIRouter(prefix="/queries", tags=["queries"])
@@ -40,17 +40,9 @@ def ask_question(
             detail="Document not found or access denied"
         )
     
-    # Embed the question
-    question_embedding = embed_text(payload.question)
-    
-    # Retrieve top 5 most similar chunks using pgvector's <-> operator (cosine distance)
-    # Note: pgvector uses <-> for distance (lower = more similar)
-    top_chunks = db.query(DocumentChunk).filter(
-        DocumentChunk.document_id == payload.document_id
-    ).order_by(
-        DocumentChunk.embedding.cosine_distance(question_embedding)
-    ).limit(5).all()
-    
+    # Embed the question and retrieve the top 5 chunks by cosine distance (lower = more similar)
+    top_chunks = [chunk for chunk, _ in retrieve_chunks(db, payload.document_id, payload.question)]
+
     if not top_chunks:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -58,7 +50,7 @@ def ask_question(
         )
     
     # Concatenate chunk texts to form context
-    context = "\n\n".join([f"[Chunk {chunk.chunk_index}]\n{chunk.chunk_text}" for chunk in top_chunks])
+    context = build_context(top_chunks)
     
     # Generate answer via Groq
     answer = get_groq_answer(payload.question, context)
