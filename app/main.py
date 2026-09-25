@@ -10,6 +10,11 @@ from app.database import engine, Base, SessionLocal
 from app.routers import auth, documents, queries
 from app import demo
 
+# pgvector must exist before any table with a Vector column is created
+with engine.connect() as conn:
+    conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+    conn.commit()
+
 # Create tables
 Base.metadata.create_all(bind=engine)
 
