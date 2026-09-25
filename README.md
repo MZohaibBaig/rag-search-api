@@ -4,6 +4,12 @@
 
 A production-ready Retrieval-Augmented Generation (RAG) backend built with FastAPI, PostgreSQL + pgvector, and Groq LLM. Users upload plain-text documents; the system chunks and embeds them into a vector store, then answers questions by retrieving the most semantically relevant chunks and generating grounded answers via an LLM — all in a single API call.
 
+## Live demo
+
+https://zohaib-rag-search-api-demo.up.railway.app/demo — no signup required. The first question after idle takes ~20s while the model loads.
+
+[API docs](https://zohaib-rag-search-api-demo.up.railway.app/docs) · [Health check](https://zohaib-rag-search-api-demo.up.railway.app/health)
+
 ## Why This Project
 
 This project applies core AI/ML concepts — embeddings, vector similarity search, and LLM integration — to a real, deployable backend. It bridges my FYP work on visual search ([LensHive](https://github.com/zohaibbaig): CLIP + FAISS for image retrieval) to text-based RAG, demonstrating depth in retrieval systems and semantic understanding across both modalities.
