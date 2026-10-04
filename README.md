@@ -12,7 +12,7 @@ https://zohaib-rag-search-api-demo.up.railway.app/demo — no signup required. T
 
 ## Why This Project
 
-This project applies core AI/ML concepts — embeddings, vector similarity search, and LLM integration — to a real, deployable backend. It bridges my FYP work on visual search ([LensHive](https://github.com/zohaibbaig): CLIP + FAISS for image retrieval) to text-based RAG, demonstrating depth in retrieval systems and semantic understanding across both modalities.
+This project applies core AI/ML concepts — embeddings, vector similarity search, and LLM integration — to a real, deployable backend. It bridges my FYP work on visual search ([LensHive](https://github.com/Bee-code1/LensHive): CLIP + FAISS for image retrieval) to text-based RAG, demonstrating depth in retrieval systems and semantic understanding across both modalities.
 
 ## Architecture
 
@@ -58,7 +58,7 @@ Client Request
 | **Backend** | FastAPI, Uvicorn |
 | **Database** | PostgreSQL 18 + pgvector 0.8.3 |
 | **Auth** | JWT (HS256) + bcrypt password hashing |
-| **Embeddings** | sentence-transformers/all-MiniLM-L6-v2 (384-dim) |
+| **Embeddings** | fastembed (ONNX runtime), sentence-transformers/all-MiniLM-L6-v2 (384-dim) |
 | **LLM** | Groq API — openai/gpt-oss-20b (free tier) |
 | **Testing** | httpx (end-to-end script) |
 | **Containerization** | Docker + docker-compose |
@@ -71,6 +71,7 @@ Client Request
 
 1. Clone and enter the project:
    ```bash
+   git clone https://github.com/MZohaibBaig/rag-search-api.git
    cd rag-search-api
    ```
 
@@ -151,7 +152,13 @@ Run the end-to-end verification script (requires the API to be running):
 python tests/manual_smoke.py
 ```
 
-This is a manual smoke script, not a pytest suite — a pytest suite is in progress.
+Run the pytest suite:
+
+```bash
+pytest
+```
+
+`tests/` covers chunking (section/sentence boundaries, overlap, size limit), RRF fusion, abstention, the demo endpoints (self-heal, rate limiting, retrieval response), and two Postgres-backed checks (schema upgrade/reseed and the retrieval eval thresholds), which are skipped when no Postgres is reachable. `manual_smoke.py` above is a separate manual script, not part of pytest.
 
 The script registers a user, logs in, uploads a sample document, asks a question, and checks history — printing a `PASS/FAIL` result per step.
 
@@ -183,25 +190,16 @@ Target: http://127.0.0.1:8000
 
 4. **LLM grounding** — The Groq system prompt instructs the model to answer *only* from the retrieved chunks. If the answer is not in the context, the model says so. This reduces hallucination and keeps responses honest about what the document actually contains.
 
-5. **Separated modules** — `chunking.py`, `embeddings.py`, and `groq_client.py` are isolated from the route handlers. Each can be swapped, tested, or replaced independently (e.g., swap sentence-transformers for OpenAI embeddings, or Groq for a local Ollama model) without touching the API layer.
+5. **Separated modules** — `chunking.py`, `embeddings.py`, and `groq_client.py` are isolated from the route handlers. Each can be swapped, tested, or replaced independently (e.g., swap fastembed for OpenAI embeddings, or Groq for a local Ollama model) without touching the API layer.
 
-## Portfolio Context
+## Deployment
 
-This is **Project 3** of a 5-project backend portfolio targeting junior roles at Arbisoft, Folio3, 10Pearls, and NetSol.
-
-| # | Project | Stack Focus |
-|---|---------|-------------|
-| 1 | REST API | Django REST Framework + DRF patterns |
-| 2 | Async Tasks | FastAPI + Celery + Redis caching |
-| **3** | **RAG + Vector DB** | **FastAPI + pgvector + LLM (this project)** |
-| 4 | *(in progress)* | — |
-| 5 | *(in progress)* | — |
+Deployed on Railway as two services: the API (built from the `Dockerfile`) and its own Postgres service with the pgvector extension. Embeddings run through fastembed (ONNX) instead of PyTorch/sentence-transformers, which cut the Docker image from 8.76GB to 746MB.
 
 ## Future Improvements
 
 - **Batch embedding** for large documents (currently sequential per chunk)
 - **Query caching** via Redis to avoid re-embedding identical questions
-- **Hybrid search** combining BM25 keyword matching with vector similarity for better recall
 - **Streaming responses** via Server-Sent Events so answers stream token-by-token
 - **Fine-tuned embeddings** for domain-specific corpora (legal, medical, etc.)
 
