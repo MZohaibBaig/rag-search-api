@@ -134,12 +134,13 @@ async function loadExamples() {
 
 function renderChunks(chunks) {
   const wrap = el('div');
-  wrap.appendChild(el('h2', null, 'Retrieved chunks (ranked by similarity)'));
+  wrap.appendChild(el('h2', null, 'Retrieved chunks (semantic + keyword search, fused)'));
   chunks.forEach((c, i) => {
     const card = el('div', 'card');
     const head = el('div', 'head');
     head.appendChild(el('span', null, '#' + (i + 1) + ' · chunk ' + c.chunk_index));
-    head.appendChild(el('span', 'score', 'similarity ' + c.similarity.toFixed(3) + ' · distance ' + c.distance.toFixed(3)));
+    head.appendChild(el('span', 'score', 'similarity ' + c.similarity.toFixed(3) + ' · distance ' + c.distance.toFixed(3) +
+      (c.matched_by ? ' · matched by ' + c.matched_by : '')));
     card.appendChild(head);
     const bar = el('div', c.similarity < 0.3 ? 'bar low' : 'bar');
     const fill = el('div');
@@ -173,8 +174,9 @@ async function ask(question, unanswerable) {
     }
     out.appendChild(renderChunks(d.chunks));
     if (d.status === 'ok') {
-      out.appendChild(el('div', 'latency',
-        'retrieved ' + d.chunks.length + ' chunks in ' + d.retrieve_ms + 'ms - generated answer in ' + (d.generate_ms / 1000).toFixed(1) + 's'));
+      out.appendChild(el('div', 'latency', d.abstained
+        ? 'retrieved ' + d.chunks.length + ' chunks in ' + d.retrieve_ms + 'ms - nothing on topic, so no answer was generated'
+        : 'retrieved ' + d.chunks.length + ' chunks in ' + d.retrieve_ms + 'ms - generated answer in ' + (d.generate_ms / 1000).toFixed(1) + 's'));
       out.appendChild(el('h2', null, 'Answer'));
       out.appendChild(el('div', 'answer', d.answer));
     } else {

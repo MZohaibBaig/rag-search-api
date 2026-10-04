@@ -45,7 +45,7 @@ Copy `.env.example` to `.env`. Critical ones:
 
 ## Architecture
 
-This is a FastAPI RAG (Retrieval-Augmented Generation) backend. The query flow: upload document → chunk text → embed chunks → store in pgvector → ask question → embed question → cosine similarity search → top 5 chunks → Groq LLM → answer.
+This is a FastAPI RAG (Retrieval-Augmented Generation) backend. The query flow: upload document → chunk text → embed chunks → store in pgvector → ask question → hybrid search (pgvector cosine + Postgres full-text, fused with RRF; `app/rag.py: retrieve`) → top 5 chunks → Groq LLM → answer. Off-topic questions abstain before the LLM call. Retrieval quality: `python -m tests.eval.run_eval`.
 
 **Entry point:** `app/main.py` — creates all SQLAlchemy tables at startup, wires up CORS, and includes the three routers.
 
@@ -54,7 +54,7 @@ This is a FastAPI RAG (Retrieval-Augmented Generation) backend. The query flow: 
 **Models (`app/models.py`):** Four tables:
 - `users` — username/email/bcrypt-hashed password
 - `documents` — owned by a user, metadata only (no file stored)
-- `document_chunks` — text + `Vector(384)` embedding (pgvector); chunk_size=500 chars, overlap=100
+- `document_chunks` — text + `Vector(384)` embedding (pgvector); section/sentence-aware chunks (~500 chars, 100 overlap) prefixed with their heading; `tsv` generated tsvector column (GIN) for keyword search
 - `query_logs` — persists every Q&A pair per user+document
 
 **Auth (`app/auth.py`):** JWT via `python-jose` (HS256). `get_current_user` is a FastAPI dependency that validates the Bearer token and returns the `User` ORM object. `SECRET_KEY` is read at module import — missing it raises `RuntimeError` immediately.

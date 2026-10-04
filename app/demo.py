@@ -17,7 +17,7 @@ from app.auth import hash_password
 from app.database import SessionLocal, get_db, init_db
 from app.groq_client import get_groq_answer
 from app.models import Document, DocumentChunk, User
-from app.rag import build_context, ingest_text, retrieve_chunks
+from app.rag import INGEST_VERSION, NO_ANSWER, build_context, ingest_text, retrieve
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -54,23 +54,28 @@ def seed_demo_document() -> None:
             db.commit()
             db.refresh(user)
 
-        exists = db.query(Document).filter(
+        existing = db.query(Document).filter(
             Document.user_id == user.id, Document.filename == DEMO_FILENAME
-        ).first()
-        if exists:
-            has_chunks = db.query(DocumentChunk).filter(
-                DocumentChunk.document_id == exists.id
-            ).first()
-            if has_chunks:
-                return
-            # A previous seed committed the Document but died before its chunks were stored.
-            logger.warning("Demo document %s has no chunks; rebuilding it", DEMO_FILENAME)
-            db.delete(exists)
-            db.commit()
+        ).order_by(Document.id.desc()).all()
+        current = next((
+            d for d in existing
+            if d.ingest_version == INGEST_VERSION
+            and db.query(DocumentChunk).filter(DocumentChunk.document_id == d.id).first()
+        ), None)
 
-        text = DEMO_DOC_PATH.read_text(encoding="utf-8")
-        ingest_text(db, user.id, DEMO_FILENAME, text)
-        logger.info("Seeded demo document %s", DEMO_FILENAME)
+        if current is None:
+            # Missing, built by older chunking/embeddings, or left without chunks. Build the new
+            # copy first: requests keep being served from the old one until it's committed.
+            text = DEMO_DOC_PATH.read_text(encoding="utf-8")
+            current = ingest_text(db, user.id, DEMO_FILENAME, text)
+            logger.info("Seeded demo document %s (ingest version %s)", DEMO_FILENAME, INGEST_VERSION)
+
+        stale = [d for d in existing if d.id != current.id]
+        for document in stale:
+            db.delete(document)
+        if stale:
+            db.commit()
+            logger.info("Removed %d stale copy(ies) of the demo document", len(stale))
     except Exception:
         db.rollback()
         logger.exception("Demo document seeding failed; /demo/ask will return 503 until it succeeds")
@@ -120,9 +125,10 @@ def demo_examples():
 
 
 def find_demo_document(db: Session) -> Document | None:
+    # Newest first: while a reseed swaps in a rebuilt copy, the new one wins
     return db.query(Document).join(User, Document.user_id == User.id).filter(
         User.username == DEMO_USERNAME, Document.filename == DEMO_FILENAME
-    ).first()
+    ).order_by(Document.id.desc()).first()
 
 
 # Serializes self-healing so concurrent requests don't seed the demo document twice.
@@ -172,31 +178,37 @@ def demo_ask(payload: DemoQuestion, db: Session = Depends(get_db)):
         raise HTTPException(status_code=422, detail="Question is empty.")
 
     t0 = perf_counter()
-    results = retrieve_chunks(db, document.id, question)
+    retrieval = retrieve(db, document.id, question)
     retrieve_ms = round((perf_counter() - t0) * 1000)
 
     chunks = [
         {
-            "chunk_index": chunk.chunk_index,
-            "chunk_text": chunk.chunk_text,
-            "distance": round(distance, 4),
-            "similarity": round(1 - distance, 4),
+            "chunk_index": hit.chunk.chunk_index,
+            "chunk_text": hit.chunk.chunk_text,
+            "distance": round(hit.distance, 4),
+            "similarity": round(1 - hit.distance, 4),
+            "matched_by": hit.matched_by,
         }
-        for chunk, distance in results
+        for hit in retrieval.hits
     ]
 
     t1 = perf_counter()
-    try:
-        answer = get_groq_answer(question, build_context([c for c, _ in results]))
-        status, error = "ok", None
-    except Exception:
-        logger.exception("Groq call failed for /demo/ask")
-        answer, status = None, "generation_failed"
-        error = "The answer service is unavailable right now. The retrieved chunks above are still real."
+    if retrieval.abstain:
+        # Nothing in the document is on topic: don't spend an LLM call on it
+        answer, status, error = NO_ANSWER, "ok", None
+    else:
+        try:
+            answer = get_groq_answer(question, build_context([hit.chunk for hit in retrieval.hits]))
+            status, error = "ok", None
+        except Exception:
+            logger.exception("Groq call failed for /demo/ask")
+            answer, status = None, "generation_failed"
+            error = "The answer service is unavailable right now. The retrieved chunks above are still real."
     generate_ms = round((perf_counter() - t1) * 1000)
 
     return {
         "status": status,
+        "abstained": retrieval.abstain,
         "answer": answer,
         "error": error,
         "chunks": chunks,
