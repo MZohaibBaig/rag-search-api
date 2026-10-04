@@ -177,9 +177,9 @@ Target: http://127.0.0.1:8000
 
 1. **User data isolation** — Every query is scoped to `current_user.id`. Users cannot read, query, or delete another user's documents or history, enforced at the database query level (not just at the route level).
 
-2. **Chunking strategy** — 500-character chunks with 100-character overlap. The overlap preserves sentence context at boundaries so that a semantically important sentence split across two chunks can still be retrieved by either.
+2. **Chunking strategy** — Chunks of up to ~500 characters that follow section, paragraph and sentence boundaries, with up to 100 characters of whole-sentence overlap. Chunks never cross a heading, and each is prefixed with its section heading so the heading is embedded and searchable with the text.
 
-3. **Vector similarity with pgvector** — Uses cosine distance (`<->` operator) to retrieve the top-5 most relevant chunks. Cosine distance is appropriate here because embedding magnitude carries no useful signal — only direction matters for semantic similarity.
+3. **Hybrid retrieval** — pgvector cosine distance (`<=>`) and Postgres full-text search (a generated `tsvector` column with a GIN index) each return 20 candidates, fused with Reciprocal Rank Fusion into the top 5. Multi-clause questions that match weakly are also searched clause by clause. If nothing in the document is on topic (best cosine similarity below a threshold calibrated in `tests/eval`), the API answers "can't answer" without calling the LLM. Retrieval quality is measured by `python -m tests.eval.run_eval` (recall@5, MRR, abstain rate).
 
 4. **LLM grounding** — The Groq system prompt instructs the model to answer *only* from the retrieved chunks. If the answer is not in the context, the model says so. This reduces hallucination and keeps responses honest about what the document actually contains.
 

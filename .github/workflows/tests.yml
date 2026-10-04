@@ -1,0 +1,42 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg18
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # The DB-backed tests and the retrieval eval create their own throwaway databases here
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+      SECRET_KEY: ci-only-secret-key
+      REQUIRE_DB: "1"   # a missing database fails the DB-backed tests instead of skipping them
+      FASTEMBED_CACHE_PATH: ${{ github.workspace }}/.fastembed
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - uses: actions/cache@v4
+        with:
+          path: .fastembed
+          key: fastembed-all-MiniLM-L6-v2
+      # Unit tests, schema-upgrade/reseed check, and the retrieval eval thresholds
+      # (tests/test_db_backed.py). Run `python -m tests.eval.run_eval --questions` for the full report.
+      - run: python -m pytest -q

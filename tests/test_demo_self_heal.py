@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError
 
 from app import demo
+from app.rag import Hit, Retrieval
 
 DOC = SimpleNamespace(id=1)
 CHUNK = SimpleNamespace(chunk_index=0, chunk_text="The lighthouse was designed by Ada Marsh.")
@@ -20,7 +21,8 @@ def _missing_table():
 def client(monkeypatch):
     """Demo router with the DB layer mocked out: no Postgres, embeddings or Groq needed."""
     demo._hits.clear()
-    monkeypatch.setattr(demo, "retrieve_chunks", lambda db, doc_id, q: [(CHUNK, 0.2)])
+    monkeypatch.setattr(demo, "retrieve", lambda db, doc_id, q: Retrieval(
+        hits=[Hit(chunk=CHUNK, distance=0.2, matched_by="both")], abstain=False))
     monkeypatch.setattr(demo, "get_groq_answer", lambda q, ctx: "Ada Marsh.")
     app = FastAPI()
     app.include_router(demo.router)

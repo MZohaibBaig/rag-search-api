@@ -6,7 +6,7 @@ from app.database import get_db
 from app.models import User, Document, QueryLog
 from app.schemas import AskQuestion, AskQuestionResponse, QueryLogResponse, DocumentChunkResponse
 from app.auth import get_current_user
-from app.rag import retrieve_chunks, build_context
+from app.rag import NO_ANSWER, retrieve, build_context
 from app.groq_client import get_groq_answer
 
 router = APIRouter(prefix="/queries", tags=["queries"])
@@ -40,8 +40,9 @@ def ask_question(
             detail="Document not found or access denied"
         )
     
-    # Embed the question and retrieve the top 5 chunks by cosine distance (lower = more similar)
-    top_chunks = [chunk for chunk, _ in retrieve_chunks(db, payload.document_id, payload.question)]
+    # Hybrid retrieval (cosine + full-text, fused with RRF): the top 5 chunks
+    retrieval = retrieve(db, payload.document_id, payload.question)
+    top_chunks = [hit.chunk for hit in retrieval.hits]
 
     if not top_chunks:
         raise HTTPException(
@@ -49,11 +50,12 @@ def ask_question(
             detail="No chunks found in document"
         )
     
-    # Concatenate chunk texts to form context
-    context = build_context(top_chunks)
-    
-    # Generate answer via Groq
-    answer = get_groq_answer(payload.question, context)
+    if retrieval.abstain:
+        # Nothing in the document is on topic: skip the LLM call
+        answer = NO_ANSWER
+    else:
+        # Concatenate chunk texts to form context, then generate the answer via Groq
+        answer = get_groq_answer(payload.question, build_context(top_chunks))
     
     # Store in QueryLog
     query_log = QueryLog(
