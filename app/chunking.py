@@ -78,6 +78,8 @@ def _section_chunks(paragraphs: list[str], chunk_size: int, overlap: int) -> lis
         if current and (too_long or paragraph_cut):
             chunks.append(" ".join(current))
             current = _overlap_tail(current, overlap)
+            if _length(current + [sentence]) > chunk_size:
+                current = []  # the overlap tail leaves no room for the next sentence
         current.append(sentence)
     if current:
         chunks.append(" ".join(current))

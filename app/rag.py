@@ -143,8 +143,8 @@ def retrieve(db: Session, document_id: int, question: str, k: int = TOP_K,
         matched_by = "both" if in_semantic and in_keyword else "semantic" if in_semantic else "keyword"
         hits.append(Hit(chunk=chunk, distance=dist, matched_by=matched_by))
 
-    best = max(1 - hit.distance for hit in hits)
-    return Retrieval(hits=hits, abstain=best < ABSTAIN_SIMILARITY)
+    # Judged on the best semantic match overall, which fusion may have pushed out of the top k
+    return Retrieval(hits=hits, abstain=best_similarity < ABSTAIN_SIMILARITY)
 
 
 def build_context(chunks: list[DocumentChunk]) -> str:

@@ -41,6 +41,15 @@ def test_splits_on_sentence_boundaries_with_whole_sentence_overlap():
         assert before.split(". ")[-1].rstrip(".") in after  # last sentence repeats in the next chunk
 
 
+def test_overlap_tail_is_dropped_when_it_would_push_a_chunk_over_chunk_size():
+    # Each sentence is 57 chars: the tail fits the overlap (80) but tail + next sentence is 115 > 100.
+    sentences = [("Abcdefghij " * 5).strip() + f" {i}." for i in range(6)]
+    chunks = chunk_text("Heading\n" + " ".join(sentences), chunk_size=100, overlap=80)
+    assert len(chunks) > 2
+    for chunk in chunks:
+        assert len(chunk.split("\n", 1)[1]) <= 100
+
+
 def test_overlong_text_without_punctuation_is_wrapped_at_word_boundaries():
     chunks = chunk_text("word " * 400, chunk_size=200, overlap=0)
     assert len(chunks) > 5 and all(len(c) <= 200 for c in chunks)
@@ -58,6 +67,34 @@ def test_split_clauses_on_compound_questions():
     assert rag.split_clauses("Who designed Brindlemoor Lighthouse, and why was it built?") == [
         "Who designed Brindlemoor Lighthouse", "why was it built"]
     assert rag.split_clauses("How tall is the tower?") == ["How tall is the tower"]
+
+
+def test_best_semantic_match_outside_fused_top_k_does_not_abstain(monkeypatch):
+    # Chunk 1 is the closest semantically but fusion ranks chunks 2-6 above it
+    # (they appear in both lists); those five are all far from the question.
+    semantic = [(1, 0.1)] + [(i, 0.95) for i in range(2, 8)]
+    monkeypatch.setattr(rag, "embed_text", lambda text: [0.0] * 384)
+    monkeypatch.setattr(rag, "_semantic_search", lambda *a: semantic)
+    monkeypatch.setattr(rag, "_keyword_search", lambda *a: [2, 3, 4, 5, 6, 7])
+
+    class Chunk:
+        def __init__(self, id):
+            self.id = id
+
+    class FakeQuery:
+        def filter(self, *a):
+            return self
+
+        def all(self):
+            return [(Chunk(i), 0.95) for i in range(2, 7)]
+
+    class FakeDB:
+        def query(self, *a):
+            return FakeQuery()
+
+    result = rag.retrieve(FakeDB(), document_id=1, question="how tall")
+    assert [h.chunk.id for h in result.hits] == [2, 3, 4, 5, 6]  # chunk 1 really is displaced
+    assert not result.abstain
 
 
 def test_rrf_rewards_agreement_between_rankings():
