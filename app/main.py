@@ -6,17 +6,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
-from app.database import engine, Base, SessionLocal
+from app.database import init_db, SessionLocal
 from app.routers import auth, documents, queries
 from app import demo
 
-# pgvector must exist before any table with a Vector column is created
-with engine.connect() as conn:
-    conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-    conn.commit()
-
-# Create tables
-Base.metadata.create_all(bind=engine)
+# Extension + tables
+init_db()
 
 
 @asynccontextmanager
@@ -69,10 +64,16 @@ def root():
 
 @app.get("/health", include_in_schema=False)
 def health():
-    """Unauthenticated liveness + DB connectivity check. Excluded from OpenAPI schema."""
+    """Unauthenticated liveness + DB check (tables and demo document). Excluded from OpenAPI schema."""
     db = SessionLocal()
     try:
         db.execute(text("SELECT 1"))
+        # A missing documents table raises a SQLAlchemyError, handled below as a 503
+        if not demo.find_demo_document(db):
+            return JSONResponse(
+                status_code=503,
+                content={"status": "error", "detail": "demo document is missing"},
+            )
         return {"status": "ok"}
     except SQLAlchemyError as exc:
         return JSONResponse(

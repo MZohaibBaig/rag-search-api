@@ -1,6 +1,7 @@
 import logging
 import os
 import secrets
+import threading
 import time
 from collections import defaultdict, deque
 from pathlib import Path
@@ -9,10 +10,11 @@ from time import perf_counter
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.auth import hash_password
-from app.database import SessionLocal, get_db
+from app.database import SessionLocal, get_db, init_db
 from app.groq_client import get_groq_answer
 from app.models import Document, DocumentChunk, User
 from app.rag import build_context, ingest_text, retrieve_chunks
@@ -117,12 +119,51 @@ def demo_examples():
     return {"filename": DEMO_FILENAME, "examples": EXAMPLES}
 
 
-@router.post("/ask", dependencies=[Depends(rate_limit)])
-def demo_ask(payload: DemoQuestion, db: Session = Depends(get_db)):
-    """Read-only, no-auth Q&A scoped to the seeded demo document. Writes nothing."""
-    document = db.query(Document).join(User, Document.user_id == User.id).filter(
+def find_demo_document(db: Session) -> Document | None:
+    return db.query(Document).join(User, Document.user_id == User.id).filter(
         User.username == DEMO_USERNAME, Document.filename == DEMO_FILENAME
     ).first()
+
+
+# Serializes self-healing so concurrent requests don't seed the demo document twice.
+_heal_lock = threading.Lock()
+
+
+def get_demo_document(db: Session) -> Document | None:
+    """Find the demo document. If the tables or the document are missing (e.g. the database
+    was wiped under a running app), rebuild them once and retry. None if still unavailable."""
+    def lookup() -> Document | None:
+        try:
+            return find_demo_document(db)
+        except SQLAlchemyError:
+            db.rollback()
+            return None
+
+    document = lookup()
+    if document:
+        return document
+
+    with _heal_lock:
+        # Another request may have healed while we waited for the lock
+        document = lookup()
+        if document:
+            return document
+        try:
+            logger.warning("Demo document missing; re-creating tables and re-seeding")
+            init_db()
+            seed_demo_document()
+            return find_demo_document(db)
+        except SQLAlchemyError:
+            db.rollback()
+            logger.exception("Demo self-heal failed")
+            return None
+
+
+@router.post("/ask", dependencies=[Depends(rate_limit)])
+def demo_ask(payload: DemoQuestion, db: Session = Depends(get_db)):
+    """Read-only, no-auth Q&A scoped to the seeded demo document. Writes nothing
+    per request (it only re-seeds when the demo document is missing)."""
+    document = get_demo_document(db)
     if not document:
         raise HTTPException(status_code=503, detail="Demo document is not available yet.")
 
