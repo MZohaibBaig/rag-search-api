@@ -40,7 +40,7 @@
 </head>
 <body>
 
-<div class="msg wake" id="wake" hidden>Waking up the server, the first request can take ~15 s.</div>
+<div class="msg wake" id="wake" hidden>Waking up the server… this can take ~15 s.</div>
 
 <h1>RAG Search Demo</h1>
 <div class="sub">
@@ -102,38 +102,39 @@ function showMsg(container, text, kind) {
   container.replaceChildren(el('div', 'msg ' + kind, text));
 }
 
-// The app sleeps when idle. Any request that takes over 3 s shows the wake-up notice
-// until no request is waiting any more.
-let waiting = 0;
-async function api(url, options) {
-  const timer = setTimeout(() => { $('wake').hidden = false; }, 3000);
-  waiting++;
+// The app can fall asleep while a tab is open. Network errors and 502 are retried with backoff
+// for up to 30 s. The wake-up notice shows only while a request is retrying; pass
+// { notify: false } to keep it hidden (uploads show their own processing message instead).
+let retrying = 0;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+async function api(url, options, { notify = true, retryStatuses = [502] } = {}) {
+  const deadline = Date.now() + 30000;
+  let delay = 500;
+  let shown = false;
   try {
-    return await fetch(url, options);
+    while (true) {
+      let res = null;
+      let err = null;
+      try { res = await fetch(url, options); } catch (e) { err = e; }
+      if (res && !retryStatuses.includes(res.status)) return res;
+      if (Date.now() + delay >= deadline) {
+        if (res) return res;
+        throw err;
+      }
+      if (notify && !shown) { shown = true; retrying++; $('wake').hidden = false; }
+      await sleep(delay);
+      delay = Math.min(delay * 2, 4000);
+    }
   } finally {
-    clearTimeout(timer);
-    if (--waiting === 0) $('wake').hidden = true;
+    if (shown && --retrying === 0) $('wake').hidden = true;
   }
 }
 
-// Poll /health until the server answers, retrying on 502/503/network errors for up to 30 s.
+// Wait for /health to answer, also retrying 503 while the app boots.
 async function waitForServer() {
-  const deadline = Date.now() + 30000;
-  const timer = setTimeout(() => { $('wake').hidden = false; }, 3000);
   try {
-    while (true) {
-      try {
-        const res = await fetch('/health');
-        if (res.ok) return true;
-        if (res.status !== 502 && res.status !== 503) return false;
-      } catch (e) { /* network error while the server boots: retry */ }
-      if (Date.now() >= deadline) return false;
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-    }
-  } finally {
-    clearTimeout(timer);
-    if (waiting === 0) $('wake').hidden = true;
-  }
+    return (await api('/health', undefined, { retryStatuses: [502, 503] })).ok;
+  } catch (e) { return false; }
 }
 
 // Turn any failed response into a plain sentence, never a raw trace.
@@ -288,9 +289,9 @@ async function upload() {
   if (f.size > 5 * 1024 * 1024) { showMsg(box, 'That file is over 5 MB. Choose a smaller one.', 'error'); return; }
   const fd = new FormData();
   fd.append('file', f);
-  showMsg(box, 'Uploading, chunking and embedding…', 'ok');
+  showMsg(box, 'Processing your file, large files take up to ~30 s.', 'ok');
   try {
-    const res = await api('/documents/upload', { method: 'POST', headers: authHeaders(), body: fd });
+    const res = await api('/documents/upload', { method: 'POST', headers: authHeaders(), body: fd }, { notify: false });
     if (!res.ok) { showMsg(box, await errorText(res), 'error'); return; }
     const doc = await res.json();
     await loadDocs(doc.id);
