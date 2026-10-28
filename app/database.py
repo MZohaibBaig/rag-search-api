@@ -1,13 +1,16 @@
 import os
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy.pool import NullPool
 from dotenv import load_dotenv
 
 load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-engine = create_engine(DATABASE_URL, echo=False, pool_pre_ping=True)
+# NullPool: a connection lives only for one checkout. An idle app holds no open DB connection,
+# which lets Railway Serverless put it to sleep (it sleeps only with no outbound traffic).
+engine = create_engine(DATABASE_URL, echo=False, poolclass=NullPool)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 

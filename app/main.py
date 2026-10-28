@@ -3,10 +3,12 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from app.database import init_db, SessionLocal
+from app.housekeeping import cleanup_old_data
+from app.limits import upload_size_guard
 from app.routers import auth, documents, queries
 from app import demo
 
@@ -17,6 +19,7 @@ init_db()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     demo.seed_demo_document()
+    cleanup_old_data()
     yield
 
 
@@ -37,6 +40,9 @@ cors_origins = [
     ).split(",")
     if origin.strip()
 ]
+
+# Added before CORS so CORS wraps it: a browser can read the 413 instead of seeing a CORS failure
+app.middleware("http")(upload_size_guard)
 
 app.add_middleware(
     CORSMiddleware,
@@ -60,6 +66,12 @@ def root():
         "message": "RAG Search API is running",
         "docs": "/docs"
     }
+
+
+@app.get("/robots.txt", include_in_schema=False)
+def robots():
+    """Keep crawlers off: every crawl would wake the sleeping app."""
+    return PlainTextResponse("User-agent: *\nDisallow: /")
 
 
 @app.get("/health", include_in_schema=False)

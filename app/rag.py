@@ -1,6 +1,8 @@
+import logging
 import re
 from collections import defaultdict
 from dataclasses import dataclass
+from time import perf_counter
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -8,6 +10,11 @@ from sqlalchemy.orm import Session
 from app.models import Document, DocumentChunk
 from app.chunking import chunk_text
 from app.embeddings import embed_text, embed_batch
+from app.extract import IngestError
+
+logger = logging.getLogger("uvicorn.error")
+
+MAX_CHUNKS = 300         # per document; checked before anything is embedded
 
 # Bump whenever chunking or embeddings change in a way that makes stored chunks stale.
 # seed_demo_document() rebuilds the demo document when its stored version differs.
@@ -44,9 +51,26 @@ class Retrieval:
     abstain: bool        # True when the document has nothing on topic for this question
 
 
+def rss_mb() -> int | None:
+    """Resident memory of this process in MB, from /proc (Linux only; None elsewhere)."""
+    try:
+        with open("/proc/self/status") as status:
+            for line in status:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) // 1024
+    except OSError:
+        pass
+    return None
+
+
 def ingest_text(db: Session, user_id: int, filename: str, text: str) -> Document:
     """Create a document, chunk + embed its text, and store the chunks, in one transaction."""
+    started = perf_counter()
     chunks = chunk_text(text)
+    if not chunks:
+        raise IngestError(422, "No text found in this file")
+    if len(chunks) > MAX_CHUNKS:
+        raise IngestError(413, f"This file is too long ({len(chunks)} chunks, limit {MAX_CHUNKS})")
     embeddings = embed_batch(chunks)
 
     document = Document(user_id=user_id, filename=filename, ingest_version=INGEST_VERSION)
@@ -63,6 +87,9 @@ def ingest_text(db: Session, user_id: int, filename: str, text: str) -> Document
 
     db.commit()
     db.refresh(document)
+    rss = rss_mb()
+    logger.info("Ingested document %s: %d chunks, %d ms%s", document.id, len(chunks),
+                round((perf_counter() - started) * 1000), f", RSS {rss} MB" if rss is not None else "")
     return document
 
 
