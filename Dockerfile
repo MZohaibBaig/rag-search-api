@@ -51,7 +51,12 @@ USER appuser
 # Tell sentence-transformers to find the baked model at this path
 ENV FASTEMBED_CACHE_PATH=/models
 
+# Cap glibc malloc arenas (default is 8 x cores) so freed memory is returned instead of fragmenting
+ENV MALLOC_ARENA_MAX=2
+
 EXPOSE 8000
 
 # Item 2: bind 0.0.0.0 on $PORT, fallback 8000 — matches existing compose
-CMD sh -c "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"
+# Shell form already runs under `sh -c`, so exec makes uvicorn PID 1 and it gets SIGTERM directly. One worker: the
+# embedding model and the ingest lock are per-process.
+CMD exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1

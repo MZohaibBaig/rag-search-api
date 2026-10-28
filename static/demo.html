@@ -31,6 +31,7 @@
   .msg { font-size: 13px; padding: 10px 12px; border-radius: 6px; margin: 10px 0; }
   .msg.error { background: #2a1517; border: 1px solid #f87171; color: #fca5a5; }
   .msg.ok { color: #4ade80; }
+  .msg.wake { background: #1e293b; border: 1px solid #fbbf24; color: #fbbf24; }
   .muted { color: #64748b; font-size: 12px; }
   details { margin-top: 32px; background: #111c33; border: 1px solid #334155; border-radius: 10px; padding: 12px 14px; }
   summary { cursor: pointer; font-size: 14px; }
@@ -38,6 +39,8 @@
 </style>
 </head>
 <body>
+
+<div class="msg wake" id="wake" hidden>Waking up the server, the first request can take ~15 s.</div>
 
 <h1>RAG Search Demo</h1>
 <div class="sub">
@@ -56,7 +59,7 @@
 
 <details id="upload">
   <summary>Upload your own document</summary>
-  <div class="muted" style="margin-top:8px">Uses the authenticated API: register, log in, upload a .txt file, then ask questions about it.</div>
+  <div class="muted" style="margin-top:8px">Uses the authenticated API: register, log in, upload a file, then ask questions about it.</div>
   <div class="row">
     <input type="text" id="u-name" placeholder="username">
     <input type="email" id="u-email" placeholder="email (register only)">
@@ -69,9 +72,11 @@
   <div id="auth-msg"></div>
   <div id="upload-area" hidden>
     <div class="row">
-      <input type="file" id="u-file" accept=".txt,text/plain">
+      <input type="file" id="u-file" accept=".txt,.pdf,.docx,.xlsx,.csv">
       <button type="button" id="btn-upload">Upload</button>
     </div>
+    <div class="muted">Upload a .txt, .pdf, .docx, .xlsx or .csv file (max 5 MB).</div>
+    <div id="u-upload-msg"></div>
     <div class="row">
       <select id="u-docs"></select>
     </div>
@@ -97,6 +102,40 @@ function showMsg(container, text, kind) {
   container.replaceChildren(el('div', 'msg ' + kind, text));
 }
 
+// The app sleeps when idle. Any request that takes over 3 s shows the wake-up notice
+// until no request is waiting any more.
+let waiting = 0;
+async function api(url, options) {
+  const timer = setTimeout(() => { $('wake').hidden = false; }, 3000);
+  waiting++;
+  try {
+    return await fetch(url, options);
+  } finally {
+    clearTimeout(timer);
+    if (--waiting === 0) $('wake').hidden = true;
+  }
+}
+
+// Poll /health until the server answers, retrying on 502/503/network errors for up to 30 s.
+async function waitForServer() {
+  const deadline = Date.now() + 30000;
+  const timer = setTimeout(() => { $('wake').hidden = false; }, 3000);
+  try {
+    while (true) {
+      try {
+        const res = await fetch('/health');
+        if (res.ok) return true;
+        if (res.status !== 502 && res.status !== 503) return false;
+      } catch (e) { /* network error while the server boots: retry */ }
+      if (Date.now() >= deadline) return false;
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+  } finally {
+    clearTimeout(timer);
+    if (waiting === 0) $('wake').hidden = true;
+  }
+}
+
 // Turn any failed response into a plain sentence, never a raw trace.
 async function errorText(res) {
   if (res.status === 429) {
@@ -117,7 +156,7 @@ let busy = false;
 
 async function loadExamples() {
   try {
-    const res = await fetch('/demo/examples');
+    const res = await api('/demo/examples');
     if (!res.ok) throw new Error();
     const data = await res.json();
     $('docname').textContent = data.filename;
@@ -160,7 +199,7 @@ async function ask(question, unanswerable) {
   const out = $('result');
   showMsg(out, 'Retrieving and generating…', 'ok');
   try {
-    const res = await fetch('/demo/ask', {
+    const res = await api('/demo/ask', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ question })
@@ -192,7 +231,10 @@ async function ask(question, unanswerable) {
 }
 
 $('askform').onsubmit = (ev) => { ev.preventDefault(); ask($('q').value, false); };
-loadExamples();
+waitForServer().then((ready) => {
+  if (!ready) showMsg($('result'), 'The server is not responding. Reload the page to try again.', 'error');
+  loadExamples();
+});
 
 // ---------- Upload your own (authenticated flow) ----------
 let token = null;
@@ -201,7 +243,7 @@ const authHeaders = () => ({ 'Authorization': 'Bearer ' + token });
 async function register() {
   const box = $('auth-msg');
   try {
-    const res = await fetch('/auth/register', {
+    const res = await api('/auth/register', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username: $('u-name').value, email: $('u-email').value, password: $('u-pass').value })
     });
@@ -213,7 +255,7 @@ async function register() {
 async function login() {
   const box = $('auth-msg');
   try {
-    const res = await fetch('/auth/login', {
+    const res = await api('/auth/login', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username: $('u-name').value, password: $('u-pass').value })
     });
@@ -226,8 +268,8 @@ async function login() {
 }
 
 async function loadDocs(selectId) {
-  const res = await fetch('/documents/', { headers: authHeaders() });
-  if (!res.ok) { showMsg($('u-result'), await errorText(res), 'error'); return; }
+  const res = await api('/documents/', { headers: authHeaders() });
+  if (!res.ok) { showMsg($('u-upload-msg'), await errorText(res), 'error'); return; }
   const docs = await res.json();
   const sel = $('u-docs');
   sel.replaceChildren();
@@ -240,18 +282,20 @@ async function loadDocs(selectId) {
 }
 
 async function upload() {
+  const box = $('u-upload-msg');
   const f = $('u-file').files[0];
-  if (!f) { showMsg($('u-result'), 'Choose a .txt file first.', 'error'); return; }
+  if (!f) { showMsg(box, 'Choose a file first.', 'error'); return; }
+  if (f.size > 5 * 1024 * 1024) { showMsg(box, 'That file is over 5 MB. Choose a smaller one.', 'error'); return; }
   const fd = new FormData();
   fd.append('file', f);
-  showMsg($('u-result'), 'Uploading, chunking and embedding…', 'ok');
+  showMsg(box, 'Uploading, chunking and embedding…', 'ok');
   try {
-    const res = await fetch('/documents/upload', { method: 'POST', headers: authHeaders(), body: fd });
-    if (!res.ok) { showMsg($('u-result'), await errorText(res), 'error'); return; }
+    const res = await api('/documents/upload', { method: 'POST', headers: authHeaders(), body: fd });
+    if (!res.ok) { showMsg(box, await errorText(res), 'error'); return; }
     const doc = await res.json();
     await loadDocs(doc.id);
-    showMsg($('u-result'), 'Uploaded ' + doc.filename + ' (' + doc.chunks.length + ' chunks). Ask a question below.', 'ok');
-  } catch (e) { showMsg($('u-result'), 'Could not reach the server.', 'error'); }
+    showMsg(box, 'Uploaded ' + doc.filename + ' (' + doc.chunks.length + ' chunks). Ask a question below.', 'ok');
+  } catch (e) { showMsg(box, 'Could not reach the server.', 'error'); }
 }
 
 async function uploadAsk() {
@@ -261,7 +305,7 @@ async function uploadAsk() {
   if (!document_id || !question) { showMsg(out, 'Select a document and enter a question.', 'error'); return; }
   showMsg(out, 'Thinking…', 'ok');
   try {
-    const res = await fetch('/queries/ask', {
+    const res = await api('/queries/ask', {
       method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
       body: JSON.stringify({ document_id, question })
     });

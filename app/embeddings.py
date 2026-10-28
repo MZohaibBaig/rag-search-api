@@ -4,12 +4,21 @@ import os
 # Load model once at startup (expensive operation)
 _model = None
 
+# fastembed's default batch_size is 256; ONNX Runtime's memory arena then keeps that peak
+# (~2.7 GB for a large upload). Small batches with the arena off keep RSS flat.
+EMBED_BATCH_SIZE = 16
+
 def get_embedding_model():
     """Lazy-load and cache the embedding model."""
     global _model
     if _model is None:
         model_name = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
-        _model = TextEmbedding(model_name, cache_dir=os.getenv("FASTEMBED_CACHE_PATH", "/models"))
+        _model = TextEmbedding(
+            model_name,
+            cache_dir=os.getenv("FASTEMBED_CACHE_PATH", "/models"),
+            threads=1,
+            enable_cpu_mem_arena=False,
+        )
     return _model
 
 def embed_text(text: str) -> list[float]:
@@ -36,4 +45,4 @@ def embed_batch(texts: list[str]) -> list[list[float]]:
         List of embeddings (each a list of 384 floats).
     """
     model = get_embedding_model()
-    return [emb.tolist() for emb in model.embed(texts)]
+    return [emb.tolist() for emb in model.embed(texts, batch_size=EMBED_BATCH_SIZE)]

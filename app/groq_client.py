@@ -20,8 +20,6 @@ def get_groq_answer(question: str, context: str) -> str:
     Returns:
         The LLM's generated answer.
     """
-    client = Groq(api_key=GROQ_API_KEY)
-
     system_prompt = """You are a helpful assistant answering questions based on provided context.
 Answer only using the context provided. If the context doesn't contain enough information to answer the question, say so.
 Keep your answer concise and grounded in the context."""
@@ -33,13 +31,16 @@ Question: {question}
 
 Answer:"""
     
-    message = client.chat.completions.create(
-        model="openai/gpt-oss-20b",
-        max_tokens=1024,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
-        ]
-    )
+    # Closing the client closes its HTTP connection pool, so nothing stays open after the call
+    # (an open socket would count as outbound traffic and keep a serverless app awake).
+    with Groq(api_key=GROQ_API_KEY, timeout=30, max_retries=1) as client:
+        message = client.chat.completions.create(
+            model=os.getenv("GROQ_MODEL", "openai/gpt-oss-20b"),
+            max_tokens=1024,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ]
+        )
 
     return message.choices[0].message.content

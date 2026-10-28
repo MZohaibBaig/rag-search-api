@@ -3,13 +3,14 @@ from sqlalchemy.orm import Session
 from datetime import timedelta
 
 from app.database import get_db
+from app.limits import per_ip_limit
 from app.models import User
 from app.schemas import UserRegister, UserLogin, Token, UserResponse
 from app.auth import hash_password, verify_password, create_access_token, get_current_user, ACCESS_TOKEN_EXPIRE_MINUTES
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-@router.post("/register", response_model=UserResponse)
+@router.post("/register", response_model=UserResponse, dependencies=[Depends(per_ip_limit("register", 5))])
 def register(user_data: UserRegister, db: Session = Depends(get_db)):
     """Register a new user."""
     # Check if user already exists

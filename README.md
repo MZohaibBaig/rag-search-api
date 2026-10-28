@@ -2,11 +2,11 @@
 
 ## Overview
 
-A production-ready Retrieval-Augmented Generation (RAG) backend built with FastAPI, PostgreSQL + pgvector, and Groq LLM. Users upload plain-text documents; the system chunks and embeds them into a vector store, then answers questions by retrieving the most semantically relevant chunks and generating grounded answers via an LLM — all in a single API call.
+A production-ready Retrieval-Augmented Generation (RAG) backend built with FastAPI, PostgreSQL + pgvector, and Groq LLM. Users upload documents (.txt, .pdf, .docx, .xlsx, .csv); the system chunks and embeds them into a vector store, then answers questions by retrieving the most semantically relevant chunks and generating grounded answers via an LLM — all in a single API call.
 
 ## Live demo
 
-https://zohaib-rag-search-api-demo.up.railway.app/demo — no signup required. The first question after idle takes ~20s while the model loads.
+https://zohaib-rag-search-api-demo.up.railway.app/demo — no signup required. The demo sleeps when idle (Railway Serverless), so the first request after a quiet spell takes ~15 s while it wakes up and the model loads.
 
 [API docs](https://zohaib-rag-search-api-demo.up.railway.app/docs) · [Health check](https://zohaib-rag-search-api-demo.up.railway.app/health)
 
@@ -134,7 +134,7 @@ GROQ_API_KEY="gsk_..." POSTGRES_PASSWORD="change-me" SECRET_KEY="change-me" dock
 | `POST` | `/auth/register` | No | Register (username, email, password) |
 | `POST` | `/auth/login` | No | Login — returns JWT Bearer token |
 | `GET` | `/auth/me` | Bearer | Current user info |
-| `POST` | `/documents/upload` | Bearer | Upload text file → chunk → embed → store |
+| `POST` | `/documents/upload` | Bearer | Upload a file (see [Supported files and limits](#supported-files-and-limits)) → extract text → chunk → embed → store |
 | `GET` | `/documents/` | Bearer | List user's documents |
 | `GET` | `/documents/{id}` | Bearer | Document details with all chunks |
 | `DELETE` | `/documents/{id}` | Bearer | Delete document (cascades chunks + logs) |
@@ -143,6 +143,36 @@ GROQ_API_KEY="gsk_..." POSTGRES_PASSWORD="change-me" SECRET_KEY="change-me" dock
 | `GET` | `/queries/history/{doc_id}` | Bearer | Q&A history for a specific document |
 
 All protected endpoints expect `Authorization: Bearer <token>` in the request header.
+
+## Supported files and limits
+
+| Format | How it is read |
+|--------|----------------|
+| `.txt` | UTF-8 (BOM allowed), falling back to Windows-1252 |
+| `.csv` | One text row per data row: `Sheet \| Header: value; Header: value.` (the sheet is the file name) |
+| `.pdf` | Text layer only, page by page; no OCR, so scanned PDFs are rejected; password-protected PDFs are rejected |
+| `.docx` | Paragraphs and tables |
+| `.xlsx` | Cached cell values (formulas are not recalculated), one row per line as for `.csv` |
+
+`.doc` and `.xls` are rejected with 415 ("Please save as .docx/.xlsx"), as is anything else. The extension and the file content must agree (`%PDF-` header; a zip whose `[Content_Types].xml` matches).
+
+| Limit | Value | Response |
+|-------|-------|----------|
+| File size | 5 MB (requests over 6 MB are refused from `Content-Length` before the body is read; chunked uploads without a length get 411) | 413 |
+| Extracted text | 300,000 characters | 413 |
+| Chunks per document | 300 (checked before anything is embedded) | 413 |
+| PDF pages | 100 | 413 |
+| Workbook | 20 sheets, 2,000 rows in total (`.csv`: 2,000 rows) | 413 |
+| docx / xlsx unpacked | 50 MB and 1,000 zip entries | 413 |
+| Unreadable file / no text | corrupt, encrypted or scanned PDF, broken docx/xlsx | 422 |
+| Documents per user | 10 (delete one to upload another) | 403 |
+| Uploads, all users | 30 per rolling 24 hours (the demo user's document is not counted) | 429 |
+| Concurrent uploads | 1 at a time | 429 |
+| Per IP | 5 registrations/hour, 10 uploads/hour (in memory, reset when the app restarts) | 429 |
+
+User documents (with their chunks and query logs) older than 7 days are deleted at startup, along with accounts older than 7 days that have no documents. The demo user and its document are never touched.
+
+If the answer service (Groq) fails, `/queries/ask` returns 503 and nothing is logged.
 
 ## Testing
 
@@ -158,7 +188,7 @@ Run the pytest suite:
 pytest
 ```
 
-`tests/` covers chunking (section/sentence boundaries, overlap, size limit), RRF fusion, abstention, the demo endpoints (self-heal, rate limiting, retrieval response), and two Postgres-backed checks (schema upgrade/reseed and the retrieval eval thresholds), which are skipped when no Postgres is reachable. `manual_smoke.py` above is a separate manual script, not part of pytest.
+`tests/` covers chunking (section/sentence boundaries, overlap, size limit), RRF fusion, abstention, the demo endpoints (self-heal, rate limiting, retrieval response), uploads (every format, rejections, size/chunk/zip limits, quotas, concurrency, startup cleanup), the Groq failure path, an embedding peak-memory regression test (Linux only), and two Postgres-backed checks (schema upgrade/reseed and the retrieval eval thresholds), which are skipped when no Postgres is reachable. `manual_smoke.py` above is a separate manual script, not part of pytest.
 
 The script registers a user, logs in, uploads a sample document, asks a question, and checks history — printing a `PASS/FAIL` result per step.
 
@@ -195,6 +225,8 @@ Target: http://127.0.0.1:8000
 ## Deployment
 
 Deployed on Railway as two services: the API (built from the `Dockerfile`) and its own Postgres service with the pgvector extension. Embeddings run through fastembed (ONNX) instead of PyTorch/sentence-transformers, which cut the Docker image from 8.76GB to 746MB.
+
+The app is built to sleep on Railway Serverless, which only sleeps a service with no outbound traffic: the database engine uses `NullPool` (no connection stays open), the Groq client is closed after every call, and there are no background tasks or timers. Embedding runs one thread, 16 texts per batch, with the ONNX memory arena off, so one upload at a time holds a small, flat amount of memory.
 
 ## Future Improvements
 

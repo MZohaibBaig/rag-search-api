@@ -41,6 +41,7 @@ Copy `.env.example` to `.env`. Critical ones:
 | `SECRET_KEY` | `app/auth.py` | Required — startup will crash if absent |
 | `GROQ_API_KEY` | `app/groq_client.py` | Groq API key for LLM calls |
 | `EMBEDDING_MODEL` | `app/embeddings.py` | Defaults to `sentence-transformers/all-MiniLM-L6-v2`; model is baked into the Docker image |
+| `GROQ_MODEL` | `app/groq_client.py` | Optional; defaults to `openai/gpt-oss-20b` |
 | `CORS_ALLOWED_ORIGINS` | `app/main.py` | Comma-separated; defaults to `localhost:3000,localhost:5173` |
 
 ## Architecture
@@ -49,7 +50,7 @@ This is a FastAPI RAG (Retrieval-Augmented Generation) backend. The query flow: 
 
 **Entry point:** `app/main.py` — creates all SQLAlchemy tables at startup, wires up CORS, and includes the three routers.
 
-**Database (`app/database.py`):** SQLAlchemy 2.x with a single `SessionLocal` factory. `get_db()` is a FastAPI dependency yielding a session. Tables are auto-created by `Base.metadata.create_all` on startup; there are no migration files.
+**Database (`app/database.py`):** SQLAlchemy 2.x with a single `SessionLocal` factory on a `NullPool` engine (no connection is held between requests). `get_db()` is a FastAPI dependency yielding a session. Tables are auto-created by `Base.metadata.create_all` on startup; there are no migration files.
 
 **Models (`app/models.py`):** Four tables:
 - `users` — username/email/bcrypt-hashed password
@@ -59,9 +60,11 @@ This is a FastAPI RAG (Retrieval-Augmented Generation) backend. The query flow: 
 
 **Auth (`app/auth.py`):** JWT via `python-jose` (HS256). `get_current_user` is a FastAPI dependency that validates the Bearer token and returns the `User` ORM object. `SECRET_KEY` is read at module import — missing it raises `RuntimeError` immediately.
 
-**Embeddings (`app/embeddings.py`):** `SentenceTransformer` is lazy-loaded as a module-level singleton on first call. Model: `all-MiniLM-L6-v2` → 384-dim vectors. In Docker, the model is baked into the image at build time (no network hit on first request).
+**Embeddings (`app/embeddings.py`):** fastembed (ONNX Runtime) `TextEmbedding`, lazy-loaded as a module-level singleton on first call, with `threads=1` and `enable_cpu_mem_arena=False`; `embed_batch` uses `batch_size=16`. Model: `all-MiniLM-L6-v2` → 384-dim vectors. No torch or sentence-transformers. In Docker, the model is baked into the image at build time (no network hit on first request).
 
-**LLM (`app/groq_client.py`):** Calls Groq's `openai/gpt-oss-20b` with a system prompt that constrains answers to provided context. Context is the top-5 chunks concatenated with chunk index headers.
+**Uploads (`app/routers/documents.py`, `app/extract.py`, `app/limits.py`):** `POST /documents/upload` is a plain `def` that takes a module lock without blocking (a second concurrent upload gets 429). `extract.py` turns .txt/.csv/.pdf/.docx/.xlsx into text (parser libs imported lazily) and raises `IngestError` (an `HTTPException`) for 413/415/422. `limits.py` has the Content-Length guard middleware (413 over 6 MB before the body is parsed) and the in-memory per-IP limiter; the per-user (10 docs) and global (30 uploads / 24 h) caps are DB-backed in `documents.py`. Limits: 5 MB file, 300k chars, 300 chunks. `app/housekeeping.py` deletes user data older than 7 days at startup (never the demo user).
+
+**LLM (`app/groq_client.py`):** Calls Groq's model (`GROQ_MODEL`, default `openai/gpt-oss-20b`; 30 s timeout, 1 retry, client closed after each call) with a system prompt that constrains answers to provided context. Context is the top-5 chunks concatenated with chunk index headers.
 
 **Routers:**
 - `app/routers/auth.py` — `POST /auth/register`, `POST /auth/login`, `GET /auth/me`
@@ -70,13 +73,13 @@ This is a FastAPI RAG (Retrieval-Augmented Generation) backend. The query flow: 
 
 All document and query endpoints are user-scoped (every query filters `user_id == current_user.id`).
 
-**Docker build:** Multi-stage. Stage 1 (`builder`) installs packages and pre-downloads the embedding model. Torch CPU wheel is installed first explicitly to prevent pip from pulling the ~6 GB GPU wheel. Stage 2 (`final`) copies only the installed packages and model weights — no build tools. Non-root `appuser` is used at runtime.
+**Docker build:** Multi-stage. Stage 1 (`builder`) installs packages and pre-downloads the fastembed model. Stage 2 (`final`) copies only the installed packages and model weights — no build tools. Non-root `appuser` is used at runtime. Runs `exec uvicorn` with one worker and `MALLOC_ARENA_MAX=2`.
 
 **pgvector:** The `vector` extension must exist before SQLAlchemy creates tables. In Docker, `init.sql` runs `CREATE EXTENSION IF NOT EXISTS vector;` automatically. For local dev, run it manually in your Postgres instance.
 
-## No tests
+## Tests
 
-There are no application tests. A `test_endpoints.py` was renamed out of pytest's discovery path (see commit history).
+`py -3.13 -m pytest` (config in `pytest.ini`). Tests run against a throwaway Postgres database created by `tests/conftest.py` from `DATABASE_URL`; DB-backed tests skip when no Postgres is reachable, unless `REQUIRE_DB=1` (CI sets it). Embeddings and Groq are mocked, except the retrieval eval (`tests/eval`) and the Linux-only memory test, which use the real model. CI (`.github/workflows/tests.yml`) runs the suite on every PR and push to `main`. `tests/manual_smoke.py` is a separate manual script against a running API, not part of pytest.
 # Working agreement
 
 ## 1. Think before coding
@@ -138,5 +141,6 @@ Never report success without running something that proves it.
 - These apps bind `0.0.0.0` on `$PORT` with a fallback. Don't hardcode ports.
 
 **Deployment context**
-- Three projects deploy to Railway sharing one PostgreSQL instance, each with its own database.
+- Each project deploys to Railway with its own PostgreSQL service.
+- Railway Serverless: never add pooled/persistent DB connections, background tasks or timers. Keep embedding batch_size=16 with the arena off.
 - PG18 volumes mount at `/var/lib/postgresql`, NOT `/var/lib/postgresql/data`. This exact mistake silently broke persistence once.

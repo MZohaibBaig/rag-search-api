@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
@@ -8,6 +10,8 @@ from app.schemas import AskQuestion, AskQuestionResponse, QueryLogResponse, Docu
 from app.auth import get_current_user
 from app.rag import NO_ANSWER, retrieve, build_context
 from app.groq_client import get_groq_answer
+
+logger = logging.getLogger("uvicorn.error")
 
 router = APIRouter(prefix="/queries", tags=["queries"])
 
@@ -55,7 +59,15 @@ def ask_question(
         answer = NO_ANSWER
     else:
         # Concatenate chunk texts to form context, then generate the answer via Groq
-        answer = get_groq_answer(payload.question, build_context(top_chunks))
+        try:
+            answer = get_groq_answer(payload.question, build_context(top_chunks))
+        except Exception:
+            # Nothing is logged to QueryLog: there is no answer to record
+            logger.exception("Groq call failed for /queries/ask")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="The answer service is unavailable right now. Please try again shortly."
+            )
     
     # Store in QueryLog
     query_log = QueryLog(
